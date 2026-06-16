@@ -1,0 +1,17 @@
+{
+  "name": "SizeNote",
+  "short_name": "SizeNote",
+  "description": "입어본 사이즈를 기억하는 옷장",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1614",
+  "theme_color": "#1a1614",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
