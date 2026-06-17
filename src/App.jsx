@@ -544,12 +544,6 @@ function Compare({ garments }) {
     [garments, category]
   );
 
-  // 비교 대상: '딱 맞음'으로 기록한 옷들 (= 잘 맞을 기준)
-  const references = useMemo(
-    () => garments.filter((g) => g.category === category && g.fit === "perfect"),
-    [garments, category]
-  );
-
   const setM = (k, v) => setInput((m) => ({ ...m, [k]: v }));
 
   // 현재 비교에 쓸 치수(고른 옷의 치수 또는 직접 입력값)
@@ -564,10 +558,11 @@ function Compare({ garments }) {
   const hasSource =
     source && cat.fields.some((f) => source.measures[f.key]);
 
-  // 기준(딱 맞음) 옷들과 비교. 고른 옷 자신은 비교에서 제외.
+  // 같은 종류로 등록된 모든 옷과 비교 (고른 옷 자신은 제외).
+  // 각 항목마다 두 수치(mine/ref)와 차이를 함께 담습니다.
   const results = useMemo(() => {
     if (!hasSource) return [];
-    return references
+    return sameCategory
       .filter((ref) => ref.id !== source.self?.id)
       .map((ref) => {
         const diffs = cat.fields
@@ -575,7 +570,12 @@ function Compare({ garments }) {
             const a = parseFloat(source.measures[f.key]);
             const b = parseFloat(ref.measures?.[f.key]);
             if (isNaN(a) || isNaN(b)) return null;
-            return { field: f.label, diff: +(a - b).toFixed(1) };
+            return {
+              field: f.label,
+              mine: a,
+              ref: b,
+              diff: +(a - b).toFixed(1),
+            };
           })
           .filter(Boolean);
         const score =
@@ -586,10 +586,13 @@ function Compare({ garments }) {
       })
       .filter((r) => r.diffs.length)
       .sort((a, b) => a.score - b.score);
-  }, [references, source, cat, hasSource]);
+  }, [sameCategory, source, cat, hasSource]);
 
-  const best = results[0];
-  // 추천 판정: 가장 비슷한 옷의 평균 차이가 작으면 "잘 맞을 것"
+  // 추천은 '딱 맞음'으로 기록한 옷 중 가장 비슷한 것에서만 뽑습니다.
+  const best = useMemo(
+    () => results.find((r) => r.ref.fit === "perfect"),
+    [results]
+  );
   const verdict = best
     ? best.score < 1.5
       ? { tone: "good", text: "잘 맞을 가능성이 높아요" }
@@ -624,10 +627,10 @@ function Compare({ garments }) {
         ))}
       </div>
 
-      {references.length === 0 ? (
+      {sameCategory.length < 2 ? (
         <div className="sn-empty">
-          <p>이 종류에 '딱 맞음'으로 기록한 옷이 아직 없어요.</p>
-          <p>먼저 잘 맞았던 옷을 기록하면 여기서 비교할 수 있어요.</p>
+          <p>이 종류에는 비교할 옷이 충분하지 않아요.</p>
+          <p>같은 종류로 2개 이상 기록하면 서로 비교할 수 있어요.</p>
         </div>
       ) : (
         <>
@@ -705,7 +708,7 @@ function Compare({ garments }) {
                 : "치수를 하나 이상 입력하면 비교가 시작돼요."}
             </p>
           ) : results.length === 0 ? (
-            <p className="sn-hint">비교할 '딱 맞음' 기록이 없어요. (고른 옷 자신은 제외돼요)</p>
+            <p className="sn-hint">비교할 다른 옷이 없어요. (고른 옷 자신은 제외돼요)</p>
           ) : (
             <>
               {verdict && (
@@ -714,41 +717,52 @@ function Compare({ garments }) {
                     추천: {best.ref.brand || best.ref.product || "기록"}
                     {best.ref.sizeLabel ? ` (${best.ref.sizeLabel})` : ""}
                   </span>
-                  <span className="sn-verdict-text">{verdict.text}</span>
+                  <span className="sn-verdict-text">
+                    {verdict.text} · 잘 맞았던 옷 중 가장 비슷해요
+                  </span>
                 </div>
               )}
               <div className="sn-results">
-                {results.map(({ ref, diffs, score }, i) => (
-                  <div key={ref.id} className={`sn-result ${i === 0 ? "best" : ""}`}>
-                    <div className="sn-result-head">
-                      <div>
-                        {i === 0 && <span className="sn-badge">가장 비슷</span>}
-                        <h3>{ref.brand || ref.product || "기록"}</h3>
-                        {ref.sizeLabel && <span className="sn-size">{ref.sizeLabel}</span>}
-                      </div>
-                      <span className="sn-avg">평균 ±{score.toFixed(1)}cm</span>
-                    </div>
-                    <div className="sn-diffs">
-                      {diffs.map((d) => (
-                        <div key={d.field} className="sn-diff">
-                          <span className="sn-diff-lbl">{d.field}</span>
-                          <span
-                            className={`sn-diff-val ${
-                              Math.abs(d.diff) < 1 ? "ok" : d.diff > 0 ? "big" : "small"
-                            }`}
-                          >
-                            {d.diff === 0
-                              ? "동일"
-                              : d.diff > 0
-                              ? `+${d.diff} 큼`
-                              : `${d.diff} 작음`}
-                          </span>
+                {results.map(({ ref, diffs, score }) => {
+                  const isBest = best && ref.id === best.ref.id;
+                  const fit = FITS[ref.fit];
+                  return (
+                    <div key={ref.id} className={`sn-result ${isBest ? "best" : ""}`}>
+                      <div className="sn-result-head">
+                        <div>
+                          {isBest && <span className="sn-badge">추천</span>}
+                          <h3>{ref.brand || ref.product || "기록"}</h3>
+                          {ref.sizeLabel && <span className="sn-size">{ref.sizeLabel}</span>}
+                          {fit && <span className={`sn-fit tone-${fit.tone}`}>{fit.label}</span>}
                         </div>
-                      ))}
+                        <span className="sn-avg">평균 ±{score.toFixed(1)}cm</span>
+                      </div>
+                      <div className="sn-diffs">
+                        {diffs.map((d) => (
+                          <div key={d.field} className="sn-diff">
+                            <span className="sn-diff-lbl">{d.field}</span>
+                            <span className="sn-diff-nums">
+                              {d.mine} / {d.ref}
+                            </span>
+                            <span
+                              className={`sn-diff-val ${
+                                Math.abs(d.diff) < 1 ? "ok" : d.diff > 0 ? "big" : "small"
+                              }`}
+                            >
+                              {d.diff === 0
+                                ? "동일"
+                                : d.diff > 0
+                                ? `+${d.diff}`
+                                : `${d.diff}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+              <p className="sn-diff-legend">숫자는 “고른 옷 / 비교 옷” 순서예요. 오른쪽은 차이(cm).</p>
             </>
           )}
         </>
@@ -893,12 +907,14 @@ const CSS = `
 .sn-badge{display:inline-block;background:var(--good);color:#1a1410;font-size:11px;font-weight:700;font-family:'Helvetica Neue',sans-serif;padding:2px 9px;border-radius:6px;margin-right:8px;vertical-align:middle}
 .sn-result-head .sn-size{margin-left:8px}
 .sn-avg{font-size:12.5px;color:var(--mut);font-family:'Helvetica Neue',sans-serif;white-space:nowrap}
-.sn-diffs{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
-.sn-diff{display:flex;justify-content:space-between;background:var(--bg);border-radius:8px;padding:8px 11px;font-family:'Helvetica Neue',sans-serif}
-.sn-diff-lbl{font-size:12.5px;color:var(--soft)}
-.sn-diff-val{font-size:12.5px;font-weight:600}
+.sn-diffs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.sn-diff{display:flex;align-items:baseline;gap:7px;background:var(--bg);border-radius:8px;padding:8px 11px;font-family:'Helvetica Neue',sans-serif}
+.sn-diff-lbl{font-size:12.5px;color:var(--soft);flex:1;min-width:0}
+.sn-diff-nums{font-size:12.5px;color:var(--ink);white-space:nowrap}
+.sn-diff-val{font-size:12px;font-weight:600;white-space:nowrap}
 .sn-diff-val.ok{color:var(--good)}
 .sn-diff-val.big{color:var(--warn)}
+.sn-diff-legend{font-size:11.5px;color:var(--soft);font-family:'Helvetica Neue',sans-serif;margin-top:12px;text-align:center}
 .sn-diff-val.small{color:var(--bad)}
 
 @media(max-width:520px){
