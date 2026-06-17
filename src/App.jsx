@@ -531,85 +531,95 @@ function AddForm({ initial, onSave, onCancel }) {
 }
 
 // ── Compare view ─────────────────────────────────────────
+// 옷 이름: 브랜드 + 상품명 (둘 중 있는 것만)
+function garmentName(g) {
+  const parts = [g.brand, g.product].filter((s) => s && s.trim());
+  return parts.length ? parts.join(" ") : "이름 없음";
+}
+
 function Compare({ garments }) {
   const [category, setCategory] = useState("top");
   const [mode, setMode] = useState("pick"); // pick = 기록에서 고르기, manual = 직접 입력
-  const [sourceId, setSourceId] = useState(""); // 고른 옷의 id
+  const [picked, setPicked] = useState([]); // 기록에서 고르기: 선택된 id 배열
   const [input, setInput] = useState({}); // 직접 입력값
+  const [manualRefId, setManualRefId] = useState(""); // 직접 입력 모드에서 비교할 옷 1개
+  const [openPerfect, setOpenPerfect] = useState(true);
+  const [openOthers, setOpenOthers] = useState(true);
   const cat = CATEGORIES[category];
 
-  // 같은 종류의 모든 기록 (기준으로 고를 수 있는 후보)
   const sameCategory = useMemo(
     () => garments.filter((g) => g.category === category),
     [garments, category]
   );
+  const perfectList = useMemo(
+    () => sameCategory.filter((g) => g.fit === "perfect"),
+    [sameCategory]
+  );
+  const otherList = useMemo(
+    () => sameCategory.filter((g) => g.fit !== "perfect"),
+    [sameCategory]
+  );
 
   const setM = (k, v) => setInput((m) => ({ ...m, [k]: v }));
 
-  // 현재 비교에 쓸 치수(고른 옷의 치수 또는 직접 입력값)
-  const source = useMemo(() => {
-    if (mode === "pick") {
-      const g = sameCategory.find((x) => x.id === sourceId);
-      return g ? { measures: g.measures || {}, self: g } : null;
-    }
-    return { measures: input, self: null };
-  }, [mode, sourceId, sameCategory, input]);
-
-  const hasSource =
-    source && cat.fields.some((f) => source.measures[f.key]);
-
-  // 같은 종류로 등록된 모든 옷과 비교 (고른 옷 자신은 제외).
-  // 각 항목마다 두 수치(mine/ref)와 차이를 함께 담습니다.
-  const results = useMemo(() => {
-    if (!hasSource) return [];
-    return sameCategory
-      .filter((ref) => ref.id !== source.self?.id)
-      .map((ref) => {
-        const diffs = cat.fields
-          .map((f) => {
-            const a = parseFloat(source.measures[f.key]);
-            const b = parseFloat(ref.measures?.[f.key]);
-            if (isNaN(a) || isNaN(b)) return null;
-            return {
-              field: f.label,
-              mine: a,
-              ref: b,
-              diff: +(a - b).toFixed(1),
-            };
-          })
-          .filter(Boolean);
-        const score =
-          diffs.length === 0
-            ? Infinity
-            : diffs.reduce((s, d) => s + Math.abs(d.diff), 0) / diffs.length;
-        return { ref, diffs, score };
-      })
-      .filter((r) => r.diffs.length)
-      .sort((a, b) => a.score - b.score);
-  }, [sameCategory, source, cat, hasSource]);
-
-  // 추천은 '딱 맞음'으로 기록한 옷 중 가장 비슷한 것에서만 뽑습니다.
-  const best = useMemo(
-    () => results.find((r) => r.ref.fit === "perfect"),
-    [results]
-  );
-  const verdict = best
-    ? best.score < 1.5
-      ? { tone: "good", text: "잘 맞을 가능성이 높아요" }
-      : best.score < 3
-      ? { tone: "warn", text: "대체로 비슷하지만 약간 차이가 있어요" }
-      : { tone: "bad", text: "꽤 차이가 있어요. 신중하게 보세요" }
-    : null;
+  const togglePick = (id) =>
+    setPicked((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
 
   const reset = () => {
-    setSourceId("");
+    setPicked([]);
     setInput({});
+    setManualRefId("");
   };
+
+  // 표에 들어갈 열(columns): 각 열은 { key, name, measures }
+  const columns = useMemo(() => {
+    if (mode === "pick") {
+      return picked
+        .map((id) => sameCategory.find((g) => g.id === id))
+        .filter(Boolean)
+        .map((g) => ({
+          key: g.id,
+          name: garmentName(g),
+          sizeLabel: g.sizeLabel,
+          fit: g.fit,
+          measures: g.measures || {},
+        }));
+    }
+    // manual 모드: 첫 열 = 내 입력값, 그 다음 = 고른 옷 1개
+    const cols = [
+      { key: "__mine__", name: "내 입력값", sizeLabel: "", fit: null, measures: input },
+    ];
+    const ref = sameCategory.find((g) => g.id === manualRefId);
+    if (ref)
+      cols.push({
+        key: ref.id,
+        name: garmentName(ref),
+        sizeLabel: ref.sizeLabel,
+        fit: ref.fit,
+        measures: ref.measures || {},
+      });
+    return cols;
+  }, [mode, picked, sameCategory, input, manualRefId]);
+
+  // 표에 표시할 행(치수 항목): 어느 열이든 값이 하나라도 있는 항목만
+  const rows = useMemo(
+    () =>
+      cat.fields.filter((f) =>
+        columns.some((c) => c.measures[f.key] !== undefined && c.measures[f.key] !== "")
+      ),
+    [cat, columns]
+  );
+
+  const manualHasInput = cat.fields.some((f) => input[f.key]);
+  const showTable =
+    mode === "pick" ? columns.length > 0 : manualHasInput || !!manualRefId;
 
   return (
     <div className="sn-compare">
       <p className="sn-compare-intro">
-        비교할 옷을 고르면, <b>딱 맞았다</b>고 기록한 옷들과 얼마나 비슷한지 따져보고 가장 잘 맞을 옷을 알려드려요.
+        비교할 옷을 고르면 치수를 <b>표</b>로 나란히 보여드려요.
       </p>
 
       <div className="sn-filter">
@@ -627,147 +637,191 @@ function Compare({ garments }) {
         ))}
       </div>
 
-      {sameCategory.length < 2 ? (
-        <div className="sn-empty">
-          <p>이 종류에는 비교할 옷이 충분하지 않아요.</p>
-          <p>같은 종류로 2개 이상 기록하면 서로 비교할 수 있어요.</p>
-        </div>
-      ) : (
-        <>
-          <div className="sn-mode">
-            <button
-              className={mode === "pick" ? "on" : ""}
-              onClick={() => {
-                setMode("pick");
-                setInput({});
-              }}
-            >
-              기록에서 고르기
-            </button>
-            <button
-              className={mode === "manual" ? "on" : ""}
-              onClick={() => {
-                setMode("manual");
-                setSourceId("");
-              }}
-            >
-              직접 입력하기
-            </button>
-          </div>
+      <div className="sn-mode">
+        <button
+          className={mode === "pick" ? "on" : ""}
+          onClick={() => {
+            setMode("pick");
+            setInput({});
+            setManualRefId("");
+          }}
+        >
+          기록에서 고르기
+        </button>
+        <button
+          className={mode === "manual" ? "on" : ""}
+          onClick={() => {
+            setMode("manual");
+            setPicked([]);
+          }}
+        >
+          직접 입력하기
+        </button>
+      </div>
 
-          {mode === "pick" ? (
-            <>
-              <label className="sn-l">비교할 옷 고르기</label>
-              {sameCategory.length === 0 ? (
-                <p className="sn-hint">이 종류에 기록한 옷이 아직 없어요.</p>
-              ) : (
-                <div className="sn-pick-list">
-                  {sameCategory.map((g) => {
-                    const f = FITS[g.fit];
-                    return (
-                      <button
+      {mode === "pick" ? (
+        sameCategory.length === 0 ? (
+          <div className="sn-empty">
+            <p>이 종류로 기록한 옷이 아직 없어요.</p>
+          </div>
+        ) : (
+          <>
+            <div className="sn-group">
+              <button
+                className="sn-group-head"
+                onClick={() => setOpenPerfect((v) => !v)}
+              >
+                <span>딱 맞았던 옷 {perfectList.length > 0 && `(${perfectList.length})`}</span>
+                <span className="sn-caret">{openPerfect ? "▾" : "▸"}</span>
+              </button>
+              {openPerfect &&
+                (perfectList.length === 0 ? (
+                  <p className="sn-group-empty">아직 '딱 맞음'으로 기록한 옷이 없어요.</p>
+                ) : (
+                  <div className="sn-pick-list">
+                    {perfectList.map((g) => (
+                      <PickItem
                         key={g.id}
-                        className={`sn-pick-item ${sourceId === g.id ? "on" : ""}`}
-                        onClick={() => setSourceId(g.id)}
-                      >
-                        <span className="sn-pick-name">
-                          {g.brand || g.product || "이름 없음"}
-                        </span>
-                        {g.sizeLabel && <span className="sn-size">{g.sizeLabel}</span>}
-                        {f && <span className={`sn-fit tone-${f.tone}`}>{f.label}</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <label className="sn-l">사려는 옷의 실측 치수 (cm)</label>
-              <div className="sn-measure-grid">
-                {cat.fields.map((f) => (
-                  <div key={f.key} className="sn-mfield">
-                    <span>{f.label}</span>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      value={input[f.key] || ""}
-                      onChange={(e) => setM(f.key, e.target.value)}
-                      placeholder="0"
-                    />
+                        g={g}
+                        on={picked.includes(g.id)}
+                        onClick={() => togglePick(g.id)}
+                      />
+                    ))}
                   </div>
                 ))}
-              </div>
-            </>
-          )}
+            </div>
 
-          {!hasSource ? (
-            <p className="sn-hint">
-              {mode === "pick"
-                ? "위에서 옷을 고르면 비교가 시작돼요."
-                : "치수를 하나 이상 입력하면 비교가 시작돼요."}
-            </p>
-          ) : results.length === 0 ? (
-            <p className="sn-hint">비교할 다른 옷이 없어요. (고른 옷 자신은 제외돼요)</p>
-          ) : (
-            <>
-              {verdict && (
-                <div className={`sn-verdict tone-${verdict.tone}`}>
-                  <span className="sn-verdict-pick">
-                    추천: {best.ref.brand || best.ref.product || "기록"}
-                    {best.ref.sizeLabel ? ` (${best.ref.sizeLabel})` : ""}
-                  </span>
-                  <span className="sn-verdict-text">
-                    {verdict.text} · 잘 맞았던 옷 중 가장 비슷해요
-                  </span>
-                </div>
-              )}
-              <div className="sn-results">
-                {results.map(({ ref, diffs, score }) => {
-                  const isBest = best && ref.id === best.ref.id;
-                  const fit = FITS[ref.fit];
-                  return (
-                    <div key={ref.id} className={`sn-result ${isBest ? "best" : ""}`}>
-                      <div className="sn-result-head">
-                        <div>
-                          {isBest && <span className="sn-badge">추천</span>}
-                          <h3>{ref.brand || ref.product || "기록"}</h3>
-                          {ref.sizeLabel && <span className="sn-size">{ref.sizeLabel}</span>}
-                          {fit && <span className={`sn-fit tone-${fit.tone}`}>{fit.label}</span>}
-                        </div>
-                        <span className="sn-avg">평균 ±{score.toFixed(1)}cm</span>
-                      </div>
-                      <div className="sn-diffs">
-                        {diffs.map((d) => (
-                          <div key={d.field} className="sn-diff">
-                            <span className="sn-diff-lbl">{d.field}</span>
-                            <span className="sn-diff-nums">
-                              {d.mine} / {d.ref}
-                            </span>
-                            <span
-                              className={`sn-diff-val ${
-                                Math.abs(d.diff) < 1 ? "ok" : d.diff > 0 ? "big" : "small"
-                              }`}
-                            >
-                              {d.diff === 0
-                                ? "동일"
-                                : d.diff > 0
-                                ? `+${d.diff}`
-                                : `${d.diff}`}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="sn-divider" />
+
+            <div className="sn-group">
+              <button
+                className="sn-group-head"
+                onClick={() => setOpenOthers((v) => !v)}
+              >
+                <span>그 외 등록된 옷 {otherList.length > 0 && `(${otherList.length})`}</span>
+                <span className="sn-caret">{openOthers ? "▾" : "▸"}</span>
+              </button>
+              {openOthers &&
+                (otherList.length === 0 ? (
+                  <p className="sn-group-empty">다른 기록이 없어요.</p>
+                ) : (
+                  <div className="sn-pick-list">
+                    {otherList.map((g) => (
+                      <PickItem
+                        key={g.id}
+                        g={g}
+                        on={picked.includes(g.id)}
+                        onClick={() => togglePick(g.id)}
+                      />
+                    ))}
+                  </div>
+                ))}
+            </div>
+          </>
+        )
+      ) : (
+        <>
+          <label className="sn-l">사려는 옷의 실측 치수 (cm)</label>
+          <div className="sn-measure-grid">
+            {cat.fields.map((f) => (
+              <div key={f.key} className="sn-mfield">
+                <span>{f.label}</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={input[f.key] || ""}
+                  onChange={(e) => setM(f.key, e.target.value)}
+                  placeholder="0"
+                />
               </div>
-              <p className="sn-diff-legend">숫자는 “고른 옷 / 비교 옷” 순서예요. 오른쪽은 차이(cm).</p>
-            </>
+            ))}
+          </div>
+
+          <label className="sn-l">비교할 옷 고르기 (1개)</label>
+          {sameCategory.length === 0 ? (
+            <p className="sn-hint">이 종류로 기록한 옷이 아직 없어요.</p>
+          ) : (
+            <div className="sn-pick-list">
+              {sameCategory.map((g) => {
+                const f = FITS[g.fit];
+                return (
+                  <button
+                    key={g.id}
+                    className={`sn-pick-item ${manualRefId === g.id ? "on" : ""}`}
+                    onClick={() =>
+                      setManualRefId((prev) => (prev === g.id ? "" : g.id))
+                    }
+                  >
+                    <span className="sn-pick-name">{garmentName(g)}</span>
+                    {g.sizeLabel && <span className="sn-size">{g.sizeLabel}</span>}
+                    {f && <span className={`sn-fit tone-${f.tone}`}>{f.label}</span>}
+                  </button>
+                );
+              })}
+            </div>
           )}
         </>
       )}
+
+      {!showTable ? (
+        <p className="sn-hint">
+          {mode === "pick"
+            ? "위에서 옷을 고르면 표로 비교해드려요."
+            : "치수를 입력하거나 비교할 옷을 고르면 표가 나타나요."}
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="sn-hint">표시할 치수가 없어요.</p>
+      ) : (
+        <div className="sn-table-wrap">
+          <table className="sn-table">
+            <thead>
+              <tr>
+                <th className="sn-th-field">항목</th>
+                {columns.map((c) => (
+                  <th key={c.key}>
+                    <span className="sn-th-name">{c.name}</span>
+                    {c.sizeLabel && <span className="sn-size">{c.sizeLabel}</span>}
+                    {c.fit && FITS[c.fit] && (
+                      <span className={`sn-fit tone-${FITS[c.fit].tone}`}>
+                        {FITS[c.fit].label}
+                      </span>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((f) => (
+                <tr key={f.key}>
+                  <td className="sn-td-field">{f.label}</td>
+                  {columns.map((c) => {
+                    const v = c.measures[f.key];
+                    return (
+                      <td key={c.key}>
+                        {v === undefined || v === "" ? "–" : v}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
+  );
+}
+
+// 기록에서 고르기 - 한 항목 (다중 선택용)
+function PickItem({ g, on, onClick }) {
+  const f = FITS[g.fit];
+  return (
+    <button className={`sn-pick-item ${on ? "on" : ""}`} onClick={onClick}>
+      <span className="sn-pick-check">{on ? "✓" : "+"}</span>
+      <span className="sn-pick-name">{garmentName(g)}</span>
+      {g.sizeLabel && <span className="sn-size">{g.sizeLabel}</span>}
+      {f && <span className={`sn-fit tone-${f.tone}`}>{f.label}</span>}
+    </button>
   );
 }
 
@@ -891,6 +945,23 @@ const CSS = `
 .sn-pick-item:hover{border-color:var(--soft)}
 .sn-pick-item.on{border-color:var(--accent);background:#2c2519}
 .sn-pick-name{flex:1;font-size:14.5px;color:var(--ink);font-family:'Helvetica Neue',sans-serif}
+.sn-pick-check{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:var(--bg);border:1px solid var(--line);color:var(--soft);font-size:13px;flex:0 0 auto}
+.sn-pick-item.on .sn-pick-check{background:var(--accent);border-color:var(--accent);color:#1a1410;font-weight:700}
+.sn-group{margin-bottom:4px}
+.sn-group-head{width:100%;display:flex;justify-content:space-between;align-items:center;background:none;border:none;color:var(--ink);font-family:inherit;font-size:15px;font-weight:600;padding:6px 2px;cursor:pointer;margin-bottom:8px}
+.sn-caret{color:var(--soft);font-size:13px}
+.sn-group-empty{font-size:13px;color:var(--soft);font-family:'Helvetica Neue',sans-serif;padding:4px 2px 8px}
+.sn-divider{height:1px;background:var(--line);margin:14px 0}
+.sn-table-wrap{margin-top:22px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.sn-table{border-collapse:collapse;width:100%;min-width:max-content;font-family:'Helvetica Neue',sans-serif}
+.sn-table th,.sn-table td{border:1px solid var(--line);padding:10px 13px;text-align:center;white-space:nowrap}
+.sn-table thead th{background:var(--card);color:var(--ink);font-weight:600;font-size:13.5px;vertical-align:bottom}
+.sn-th-name{display:block;margin-bottom:4px}
+.sn-table thead th .sn-size{margin:0 2px}
+.sn-table thead th .sn-fit{margin-left:4px}
+.sn-th-field,.sn-td-field{position:sticky;left:0;background:var(--card);text-align:left;color:var(--mut);font-size:13px}
+.sn-table tbody td{background:var(--bg);color:var(--ink);font-size:14px}
+.sn-table tbody td.sn-td-field{font-weight:500}
 .sn-verdict{display:flex;flex-direction:column;gap:3px;border-radius:var(--r);padding:14px 17px;margin:20px 0 4px;border:1px solid}
 .sn-verdict.tone-good{background:rgba(143,184,122,.12);border-color:var(--good)}
 .sn-verdict.tone-warn{background:rgba(217,165,102,.12);border-color:var(--warn)}
